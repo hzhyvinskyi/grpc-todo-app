@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package todo;
+
+option go_package = "todopb";
+
+message Todo {
+    string id = 1;
+    string user_id = 2;
+    string title = 3;
+    string description = 4;
+}
+
+message CreateTodoReq {
+    Todo todo = 1;
+}
+
+message CreateTodoRes {
+    Todo todo = 1;
+}
+
+message ReadTodoReq {
+    string id = 1;
+}
+
+message ReadTodoRes {
+    Todo todo = 1;
+}
+
+message UpdateTodoReq {
+    Todo todo = 1;
+}
+
+message UpdateTodoRes {
+    Todo todo = 1;
+}
+
+message DeleteTodoReq {
+    string id = 1;
+}
+
+message DeleteTodoRes {
+    bool success = 1;
+}
+
+message ListTodoReq {}
+
+message ListTodoRes {
+    Todo todo = 1;
+}
+
+service TodoService {
+    rpc CreateTodo(CreateTodoReq) returns (CreateTodoRes);
+    rpc ReadTodo(ReadTodoReq) returns (ReadTodoRes);
+    rpc UpdateTodo(UpdateTodoReq) returns (UpdateTodoRes);
+    rpc DeleteTodo(DeleteTodoReq) returns (DeleteTodoRes);
+    rpc ListTodo(ListTodoReq) returns (stream ListTodoRes);
+}

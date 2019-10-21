@@ -4,9 +4,13 @@ import (
 	"context"
 	"fmt"
 	todopb "github.com/hzhyvinskyi/grpc-todo-app/proto"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"log"
 	"net"
 	"os"
@@ -22,23 +26,52 @@ var (
 
 type TodoServiceServer struct {}
 
-func (t TodoServiceServer) CreateTodo(context.Context, *todopb.CreateTodoReq) (*todopb.CreateTodoRes, error) {
+type TodoItem struct {
+	ID			primitive.ObjectID	`bson:"_id,omitempty"`
+	UserID		string				`bson:"user_id"`
+	Title		string				`bson:"title"`
+	Description	string				`bson:"description"`
+}
+
+func (s *TodoServiceServer) CreateTodo(ctx context.Context, req *todopb.CreateTodoReq) (*todopb.CreateTodoRes, error) {
+	// Extract Todo message from request
+	todo := req.GetTodo()
+
+	// Convert  it to the TodoItem to convert it into BSON
+	data := TodoItem{
+		UserID:      todo.GetUserId(),
+		Title:       todo.GetTitle(),
+		Description: todo.GetDescription(),
+	}
+
+	result, err := tododb.InsertOne(mongoCtx, data)
+	if err != nil {
+		return nil, status.Errorf(
+			codes.Internal,
+			fmt.Sprintf("Internal error: %v", err),
+		)
+	}
+
+	oid := result.InsertedID.(primitive.ObjectID)
+
+	todo.ID = oid.Hex()
+
+	return &todopb.CreateTodoRes{Todo: todo}, nil
+}
+
+func (s TodoServiceServer) ReadTodo(context.Context, *todopb.ReadTodoReq) (*todopb.ReadTodoRes, error) {
 	panic("implement me")
 }
 
-func (t TodoServiceServer) ReadTodo(context.Context, *todopb.ReadTodoReq) (*todopb.ReadTodoRes, error) {
+func (s TodoServiceServer) UpdateTodo(context.Context, *todopb.UpdateTodoReq) (*todopb.UpdateTodoRes, error) {
 	panic("implement me")
 }
 
-func (t TodoServiceServer) UpdateTodo(context.Context, *todopb.UpdateTodoReq) (*todopb.UpdateTodoRes, error) {
+func (s TodoServiceServer) DeleteTodo(context.Context, *todopb.DeleteTodoReq) (*todopb.DeleteTodoRes, error) {
 	panic("implement me")
 }
 
-func (t TodoServiceServer) DeleteTodo(context.Context, *todopb.DeleteTodoReq) (*todopb.DeleteTodoRes, error) {
-	panic("implement me")
-}
-
-func (t TodoServiceServer) ListTodo(*todopb.ListTodoReq, todopb.TodoService_ListTodoServer) error {
+func (s TodoServiceServer) ListTodo(*todopb.ListTodoReq, todopb.TodoService_ListTodoServer) error {
 	panic("implement me")
 }
 

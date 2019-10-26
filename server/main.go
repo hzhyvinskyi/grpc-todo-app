@@ -18,19 +18,19 @@ import (
 )
 
 var (
-	port = ":8080"
-	db *mongo.Client
-	tododb *mongo.Collection
+	port     = ":8080"
+	db       *mongo.Client
+	tododb   *mongo.Collection
 	mongoCtx context.Context
 )
 
-type TodoServiceServer struct {}
+type TodoServiceServer struct{}
 
 type TodoItem struct {
-	ID			primitive.ObjectID	`bson:"_id,omitempty"`
-	UserID		string				`bson:"user_id"`
-	Title		string				`bson:"title"`
-	Description	string				`bson:"description"`
+	ID          primitive.ObjectID `bson:"_id,omitempty"`
+	UserID      string             `bson:"user_id"`
+	Title       string             `bson:"title"`
+	Description string             `bson:"description"`
 }
 
 func (s *TodoServiceServer) CreateTodo(ctx context.Context, req *todopb.CreateTodoReq) (*todopb.CreateTodoRes, error) {
@@ -59,20 +59,151 @@ func (s *TodoServiceServer) CreateTodo(ctx context.Context, req *todopb.CreateTo
 	return &todopb.CreateTodoRes{Todo: todo}, nil
 }
 
-func (s TodoServiceServer) ReadTodo(context.Context, *todopb.ReadTodoReq) (*todopb.ReadTodoRes, error) {
-	panic("implement me")
+func (s *TodoServiceServer) ReadTodo(ctx context.Context, req *todopb.ReadTodoReq) (*todopb.ReadTodoRes, error) {
+	// String convertation from proto to ObjectID
+	oid, err := primitive.ObjectIDFromHex(req.GetId())
+	if err != nil {
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			fmt.Sprintf("Can't convert to ObjectID: %v", err),
+		)
+	}
+
+	result := tododb.FindOne(ctx, bson.M{"_id": oid})
+
+	// Create empty Todo item to write decoded result into
+	data := TodoItem{}
+
+	if err = result.Decode(&data); err != nil {
+		return nil, status.Errorf(
+			codes.NotFound,
+			fmt.Sprintf("Can't find Todo with ObjectID %s: %v", req.GetId(), err),
+		)
+	}
+
+	// Cast to ReadTodoRes type
+	response := &todopb.ReadTodoRes{
+		Todo: &todopb.Todo{
+			Id:          oid.Hex(),
+			UserId:      data.UserID,
+			Title:       data.Title,
+			Description: data.Description,
+		},
+	}
+
+	return response, nil
 }
 
-func (s TodoServiceServer) UpdateTodo(context.Context, *todopb.UpdateTodoReq) (*todopb.UpdateTodoRes, error) {
-	panic("implement me")
+func (s TodoServiceServer) UpdateTodo(ctx context.Context, req *todopb.UpdateTodoReq) (*todopb.UpdateTodoRes, error) {
+	todo := req.GetTodo()
+	oid, err := primitive.ObjectIDFromHex(todo.GetId())
+	if err != nil {
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			fmt.Sprintf("Can't convert to ObjectID: %v", err),
+		)
+	}
+
+	update := bson.M{
+		"user_id":     todo.GetUserId(),
+		"title":       todo.GetTitle(),
+		"description": todo.GetDescription(),
+	}
+
+	// Convert oid into unordered bson document
+	filter := bson.M{"_id": oid}
+
+	// Result will be BSON encoded
+	// Added options to return updated BSON document instead of original
+	result := tododb.FindOneAndUpdate(ctx, filter, bson.M{"$set": update}, options.FindOneAndUpdate().SetReturnDocument(1))
+
+	decodedTodo := TodoItem{}
+	if err := result.Decode(&decodedTodo); err != nil {
+		return nil, status.Errorf(
+			codes.NotFound,
+			fmt.Sprintf("Can't find Todo with ObjectID %s", todo.GetId(), err),
+		)
+	}
+
+	return &todopb.UpdateTodoRes{
+		Todo: &todopb.Todo{
+			Id:          decodedTodo.ID.Hex(),
+			UserID:      decodedTodo.UserID,
+			Title:       decodedTodo.Title,
+			Description: decodedTodo.Description,
+		},
+	}, nil
 }
 
-func (s TodoServiceServer) DeleteTodo(context.Context, *todopb.DeleteTodoReq) (*todopb.DeleteTodoRes, error) {
-	panic("implement me")
+func (s TodoServiceServer) DeleteTodo(ctx context.Context, req *todopb.DeleteTodoReq) (*todopb.DeleteTodoRes, error) {
+	oid, err := primitive.ObjectIDFromHex(req.GetId())
+	if err != nil {
+		return nil, status.Errorf(
+			codes.InvalidArgument,
+			fmt.Sprintf("Can't convert to ObjectID: %v", err),
+		)
+	}
+
+	if _, err = tododb.DeleteOne(ctx, bson.M{"_id": oid}); err != nil {
+		return nil, status.Errorf(
+			codes.NotFound,
+			fmt.Sprintf("Can't find/delete Todo with id %s: %v", req.GetId(), err),
+		)
+	}
+
+	return &todopb.DeleteTodoRes{
+		Success: true,
+	}, nil
 }
 
-func (s TodoServiceServer) ListTodo(*todopb.ListTodoReq, todopb.TodoService_ListTodoServer) error {
-	panic("implement me")
+func (s TodoServiceServer) ListTodo(req *todopb.ListTodoReq, stream todopb.TodoService_ListTodoServer) error {
+	data := &TodoItem{}
+
+	cursor, err := tododb.Find(context.Background(), bson.M{})
+	if err != nil {
+		return status.Errorf(
+			codes.Internal,
+			fmt.Sprintf("Unknown internal error: %v", err),
+		)
+	}
+
+	defer cursor.Close(context.Background())
+
+	// Iterates through the Cursor. If there are no items, loop will break
+	for cursor.Next(context.Background()) {
+		err := cursor.Decode(data)
+		if err != nil {
+			return status.Errorf(
+				codes.Unavailable,
+				fmt.Sprint("Can't decode data: %v", err),
+			)
+		}
+
+		// If there aren't any errors, send Todo via stream
+		err = stream.Send(&todopb.ListTodoRes{
+			Todo: &todopb.Todo{
+				Id:          data.ID.Hex(),
+				UserId:      data.UserID,
+				Title:       data.Title,
+				Description: data.Description,
+			},
+		})
+		if err != nil {
+			return status.Errorf(
+				codes.Internal,
+				fmt.Sprintf("Stream Send Error: %v", err),
+			)
+		}
+
+		if err = cursor.Err(); err != nil {
+			return status.Errorf(
+				codes.Internal,
+				fmt.Sprintf("Unknown Cursor Error: %v", err),
+			)
+		}
+	}
+
+	return nil
 }
 
 func main() {
